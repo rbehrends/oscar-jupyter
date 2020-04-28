@@ -1,0 +1,66 @@
+#!/bin/bash
+set -ex
+MASTER=0
+if [ "x$1" == "x--master" ]; then
+  MASTER=1
+  shift
+fi
+if [ 0 == "$#" ]; then
+  BASEDIR="$PWD/.oscar-jupyter"
+else
+  BASEDIR="$1"
+fi
+export JULIA_DEPOT_PATH="$BASEDIR/julia-env"
+export JULIA_PROJECT="$BASEDIR/julia-env"
+export JUPYTER_BASE="$BASEDIR/jupyter"
+export JUPYTER_CONFIG_DIR="$JUPYTER_BASE/jupyterenv/config"
+export JUPYTER_DATA_DIR="$JUPYTER_BASE/jupyterenv/data"
+export JUPYTER_RUNTIME_DIR="$JUPYTER_BASE/jupyterenv/runtime"
+mkdir -p "$BASEDIR"
+python3 -m venv "$BASEDIR/python-env"
+source "$BASEDIR/python-env/bin/activate"
+pip install --cache-dir "$JUPYTER_BASE/.pip-cache" jupyter notebook
+ERR=0
+pkgaddurl() {
+  local pkg
+  for pkg in "$@"; do
+    julia -e "using Pkg; Pkg.add(PackageSpec(url=\"$pkg\"))" || ERR=1
+  done
+}
+pkgadd() {
+  local pkgs="$*"
+  julia -e "using Pkg; Pkg.add([\"${pkgs// /", "}\"])" || ERR=1
+}
+precompile() {
+  julia -e 'using Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")' || ERR=1
+  julia -e "using Pkg; Pkg.precompile()" || ERR=1
+}
+if [ "1" == "$MASTER" ]; then
+  pkgaddurl https://github.com/oscar-system/Oscar.jl
+else
+  pkgadd Oscar
+fi
+pkgadd GAP AbstractAlgebra Nemo Hecke Singular Polymake HomalgProject
+pkgadd ImplicitPlots Plots HomotopyContinuation
+precompile
+set +x
+sed -i -e '/--project=/d' "$JUPYTER_DATA_DIR"/kernels/julia-*/kernel.json
+cat >oscar <<EOF
+#!/bin/bash
+set -e
+BASEDIR="$BASEDIR"
+export JULIA_DEPOT_PATH="$BASEDIR/julia-env"
+export JULIA_PROJECT="$BASEDIR/julia-env"
+export JUPYTER_BASE="$BASEDIR/jupyter"
+export JUPYTER_CONFIG_DIR="$JUPYTER_BASE/jupyterenv/config"
+export JUPYTER_DATA_DIR="$JUPYTER_BASE/jupyterenv/data"
+export JUPYTER_RUNTIME_DIR="$JUPYTER_BASE/jupyterenv/runtime"
+source "$BASEDIR/python-env/bin/activate"
+exec "\$@"
+EOF
+chmod 755 oscar
+
+echo "=== Installation complete ==="
+if [ 0 != "$ERR" ]; then
+  echo "=== WARNING: Failed to install some Julia packages ==="
+fi
